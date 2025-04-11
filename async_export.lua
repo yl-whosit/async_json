@@ -1,26 +1,18 @@
 local fmt = string.format
---local NAMESPACE = "json_storage:"
-local key = dofile(core.get_modpath(core.get_current_modname())  .. DIR_DELIM .. "ipc_keys.lua")
 
--- local ASYNC_FIFO_SIZE = 1024 -- fix the size and wrap around indices?
--- local async_queue_front = 0
--- local async_queue_back = 0
+local key = dofile(core.get_modpath(core.get_current_modname()) .. DIR_DELIM .. "ipc_keys.lua")
+
+-- local ASYNC_FIFO_SIZE = 1024 -- TODO fix the size and wrap around indices?
+
 
 local async = {} -- the module table
 
-local initialized = false
 
-local UNIQUE_TABLE = {"json_table"} -- used to identify our tables as a special type
+
+local UNIQUE_TABLE = { "json_table" } -- used to identify our tables as a special type
 
 local function tell(fmt, ...)
     --print(string.format("* [ASYNC_INTERFACE] " .. fmt, ...))
-end
-
-local function async_done_callback(label)
-    local f = function(args)
-        tell("%s DONE: %s", label, args)
-    end
-    return f
 end
 
 
@@ -73,13 +65,12 @@ end
 
 function async.push_task(task)
     local async_fifo_back = core.ipc_get(key.FIFO_BACK)
-    core.ipc_set(key.FIFO_PREFIX ..  tostring(async_fifo_back), task)
+    core.ipc_set(key.FIFO_PREFIX .. tostring(async_fifo_back), task)
     local new_idx = async_fifo_back + 1
     tell("PUSH BACK: %s -> %s", async_fifo_back, new_idx)
     assert(core.ipc_cas(key.FIFO_BACK, async_fifo_back, new_idx)) -- this is just for my sanity
     increment_task_count()
 end
-
 
 local function create(table_id)
     async.push_task(
@@ -88,12 +79,6 @@ local function create(table_id)
             table_id = table_id,
         }
     )
-end
-
-
-local function _update(table_id, table_version, path, value)
-    -- value here is already serialized and deserialized
-    env.update(table_id, table_version, path, value)
 end
 
 
@@ -134,8 +119,16 @@ function async.get_table_id(t)
     return mt._id
 end
 
-
 local function _mk_table(data, is_root)
+    -- TODO try changing this to store data in just a plain lua table,
+    -- but creating and returning proxies on demand?
+    -- It can be more complicated, but can save some loading time or something?
+    -- maybe?
+
+    -- I guess what create tabke can also do, I just use a different process for
+    -- table creation: instead of inserting values recursively and sending each
+    -- update to async, we could have `create` message take pre-populated table too.
+
     local id = new_table_id()
     create(id)
     local dummy
@@ -149,6 +142,8 @@ local function _mk_table(data, is_root)
         dummy = {} -- this must be empty to redirect all access to metamethods!
         mt = {}
         setmetatable(dummy, mt)
+        -- If you're running lua that does not call __gc metamethod, your async
+        -- will just slowly eat your memory.
     end
     local actual
 
@@ -166,13 +161,15 @@ local function _mk_table(data, is_root)
         local typ = type(value)
         if typ == "table" then
             if (getmetatable(value) or {})._type == UNIQUE_TABLE then
+                -- previously existing one, this is just a new reference
                 actual[key] = value
             else
+                -- new plain table, wrap it
                 local wrapped_table = _mk_table(value)
                 actual[key] = wrapped_table
             end
         elseif typ == "string" or typ == "number" or typ == "boolean" or typ == "nil" then
-            --async.update(id, key, value)
+            -- simple value
             actual[key] = value
         else
             error(string.format("JSON can't store values of type %s", typ))
@@ -180,20 +177,23 @@ local function _mk_table(data, is_root)
         log("* json_table_%s[%s] = %s", id, key, actual[key])
         local ver = mt._version + 1
         mt._version = ver
+        -- send update to async
         update(id, ver, key, actual[key])
     end
 
     mt.__pairs = function(t)
-        local k,v
+        -- this required luajit 5.2 compat!!!
+        local k, v
         print("* __pairs called")
         return function()
             k, v = next(actual, k)
             return k, v
         end
     end
-    
+
     mt.__call = function(t)
-        local k,v
+        -- use this for iteration instead, if you don't have pairs() support!
+        local k, v
         print("* __call called")
         return function()
             k, v = next(actual, k)
@@ -220,7 +220,7 @@ local function _mk_table(data, is_root)
             actual = data
         else
             actual = {}
-            for k,v in pairs(data) do
+            for k, v in pairs(data) do
                 -- use normal insertion metamethods that will do everything for us
                 t[k] = v
             end
@@ -238,14 +238,6 @@ function async.create_table(data)
     local is_root = true
     return _mk_table(data, is_root)
 end
-
-
--- function async.dump(table_id)
---     local function _dump(id)
---         env.dump_table(id)
---     end
---     core.handle_async(_dump, async_done_callback("dump"), table_id)
--- end
 
 
 -- function async.get_json(callback, json_table)
@@ -270,9 +262,12 @@ function async.save_json(json_table, filepath, styled)
     )
 end
 
-
 function async.load_json(filepath)
     -- not actually async!
+
+    -- this may be the slowest part of this storage system.
+    -- see comments in _mk_table() for potential fixes.
+
     local file, file_err = io.open(filepath, 'r')
     if not file then
         error(file_err)
@@ -285,6 +280,5 @@ function async.load_json(filepath)
     end
     return async.create_table(data)
 end
-
 
 return async

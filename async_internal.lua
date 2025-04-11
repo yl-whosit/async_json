@@ -69,23 +69,19 @@ end
 
 function env.delete(table_id)
     tell("removing table_%s", table_id)
-    -- local table_name = table_name_from_id(table_id)
-    -- local cur_table_addr = core.ipc_get(table_name)
-    -- core.ipc_set(cur_table_addr, nil)
-    -- core.ipc_set(table_name, nil)
+    mirror[table_id] = nil
 end
 
 local function get_table_data(table_id)
-    -- local table_name = table_name_from_id(table_id)
-    -- local cur_table_addr = core.ipc_get(table_name)
-    -- local table_entry = core.ipc_get(cur_table_addr)
-    -- return table_entry.data, table_entry.version
+
     local t = mirror[table_id]
     tell("get_data %s %s", table_id, t)
-    return t and t.data or "ERROR!!!"
+    return t and t.data
 end
 
 local function reconstruct(table_id, reconstructed)
+    -- TODO I guess, since we have versioning for no other reason, maybe
+    -- we can use it to cache/memoize results of reconstruct?
     local out = {}
     if not reconstructed then
         reconstructed = {}
@@ -161,7 +157,7 @@ local function process_fifo()
         env.update(task.table_id, task.version, task.key, task.value)
     elseif message == "delete" then
         tell("GOT_TASK * %s %s", task.message, task.table_id)
-        error("not implemented")
+        env.delete(task.table_id)
     elseif message == "dump" then
         for k,v in pairs(mirror) do
             tell("DUMP %s %s", dump(k), dump(v))

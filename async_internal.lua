@@ -71,7 +71,7 @@ function env.create(table_id)
     counter = counter + 1
     core.ipc_set(addr, new_table) -- actual data
     assert(core.ipc_cas(table_name, nil, addr)) -- this is just a pointer to data
-    --sleep(10)
+    --sleep(math.random())
     return fmt("number of tables created: %s", counter)
 end
 
@@ -82,22 +82,27 @@ function env.update(table_id, version, key, value)
     while true do
         local table_name = table_name_from_id(table_id)
         local cur_table_addr = core.ipc_get(table_name)
-        local cur_table = core.ipc_get(cur_table_addr)
-        if cur_table.version >= version then
-            tell("OUTDATED table_%s[%s] = %s was (v%s) now (v%s)", table_id, key, value, version, cur_table_addr.version)
-            break
+        if cur_table_addr then
+            -- FIXME what if it's deleted? what if it's not created yet? How do we know?!?
+            local cur_table = core.ipc_get(cur_table_addr)
+            -- FIXME what if it's deleted at this point?
+            if cur_table.version >= version then
+                tell("OUTDATED table_%s[%s] = %s was (v%s) now (v%s)", table_id, key, value, version, cur_table_addr.version)
+                break
+            end
+            local new_table = {
+                 version = version,
+                 data = table.copy(cur_table.data),
+            }
+            new_table.data[key] = value
+            core.ipc_set(new_table_addr, new_table)
+            if core.ipc_cas(table_name, cur_table_addr, new_table_addr) then
+                tell("UPDATE SUCCESS %s", table_name)
+                core.ipc_set(cur_table_addr, nil) -- remove old data
+                break
+            end
         end
-        local new_table = {
-             version = version,
-             data = table.copy(cur_table.data),
-        }
-        new_table.data[key] = value
-        core.ipc_set(new_table_addr, new_table)
-        if core.ipc_cas(table_name, cur_table_addr, new_table_addr) then
-            tell("UPDATE SUCCESS %s", table_name)
-            core.ipc_set(cur_table_addr, nil) -- remove old data
-            break
-        end
+        sleep(1)
     end
 end
 

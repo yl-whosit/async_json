@@ -15,6 +15,7 @@ local function tell(fmt, ...)
     --print(string.format("* [ASYNC_INTERFACE] " .. fmt, ...))
 end
 
+-- TODO make everything local
 
 local function log(...)
     local msg = fmt(...)
@@ -91,6 +92,9 @@ local function update(table_id, table_version, key, value)
             version = mt._version,
         }
     end
+    -- TODO instead of actually pushing new message here, just collect them,
+    -- then send a "batch" update message at the end of the server step.
+
     async.push_task(
         {
             message = "update",

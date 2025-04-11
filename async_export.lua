@@ -1,4 +1,6 @@
-local async = {}
+local fmt = string.format
+
+local async = {} -- the module table
 
 local UNIQUE_TABLE = {"json_table"} -- used to identify our tables as a special type
 
@@ -13,7 +15,6 @@ local function async_done_callback(label)
     return f
 end
 
-local fmt = string.format
 
 local function log(...)
     local msg = fmt(...)
@@ -21,37 +22,49 @@ local function log(...)
     print(msg)
 end
 
-local id_counter = 1
 
+local id_counter = 1
 local function new_id()
     local id = id_counter
     id_counter = id_counter + 1
     return id
 end
 
+
 local function _create(table_id)
     env.create(table_id)
 end
 
+
 local function create(table_id)
     core.handle_async(_create, async_done_callback("create"), table_id)
 end
+
 
 local function _update(table_id, path, value)
     -- value here is already serialized and deserialized
     env.update(table_id, path, value)
 end
 
+
 local function update(table_id, path, value)
     if type(value) == "table" then
-        print("***", dump(value))
+        --print("***", dump(value))
         local mt = getmetatable(value) or {}
-        print("***", dump(mt))
+        --print("***", dump(mt))
         assert(mt._type == UNIQUE_TABLE)
-        value = {mt._id}
+        value = { id = mt._id }
     end
     core.handle_async(_update, async_done_callback("update"), table_id, path, value)
 end
+
+
+function async.get_table_id(t)
+    local mt = getmetatable(t)
+    assert(mt._type == UNIQUE_TABLE)
+    return mt._id
+end
+
 
 local function _mk_table(data)
     local id = new_id()
@@ -130,12 +143,9 @@ end
 
 
 function async.create_table()
+    -- this is not really async, since table is usable as soon as this returns
     return _mk_table()
 end
-
-
-
-
 
 
 function async.dump(table_id)
@@ -144,5 +154,25 @@ function async.dump(table_id)
     end
     core.handle_async(_dump, async_done_callback("dump"), table_id)
 end
+
+
+function async.get_json(callback, json_table)
+    local table_id = async.get_table_id(json_table)
+    local function _get_json(id)
+        local json = env.get_json(id)
+        return json
+    end
+    core.handle_async(_get_json, callback, table_id)
+end
+
+
+function async.save_json(callback, json_table, filepath, styled)
+    local table_id = async.get_table_id(json_table)
+    local function _save_json(id, filepath, styled)
+        env.save_json(id, filepath, styled)
+    end
+    core.handle_async(_save_json, callback, table_id, filepath, styled)
+end
+
 
 return async

@@ -30,6 +30,10 @@ local function new_id()
     return id
 end
 
+local function async_wrap(func)
+
+end
+
 
 local function _create(table_id)
     env.create(table_id)
@@ -41,13 +45,13 @@ local function create(table_id)
 end
 
 
-local function _update(table_id, path, value)
+local function _update(table_id, table_version, path, value)
     -- value here is already serialized and deserialized
-    env.update(table_id, path, value)
+    env.update(table_id, table_version, path, value)
 end
 
 
-local function update(table_id, path, value)
+local function update(table_id, table_version, path, value)
     if type(value) == "table" then
         --print("***", dump(value))
         local mt = getmetatable(value) or {}
@@ -55,10 +59,10 @@ local function update(table_id, path, value)
         assert(mt._type == UNIQUE_TABLE)
         value = {
             id = mt._id,
-            is_root = mt._is_root, -- this is pointless
+            version = mt._version,
         }
     end
-    core.handle_async(_update, async_done_callback("update"), table_id, path, value)
+    core.handle_async(_update, async_done_callback("update"), table_id, table_version, path, value)
 end
 
 
@@ -99,6 +103,7 @@ local function _mk_table(data, is_root)
     mt._type = UNIQUE_TABLE
     mt._id = id
     mt._is_root = is_root -- this is pointless
+    mt._version = 0
 
     mt.__index = function(t, key)
         log("* json_table_%s[%s]", id, key)
@@ -121,7 +126,9 @@ local function _mk_table(data, is_root)
             error(string.format("JSON can't store values of type %s", typ))
         end
         log("* json_table_%s[%s] = %s", id, key, actual[key])
-        update(id, key, actual[key]) -- FIXME this is wrong??
+        local ver = mt._version + 1
+        mt._version = ver
+        update(id, ver, key, actual[key])
     end
 
     mt.__pairs = function(t)

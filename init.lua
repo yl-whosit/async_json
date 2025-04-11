@@ -1,7 +1,7 @@
 local MODNAME = core.get_current_modname()
 local MODPATH = core.get_modpath(MODNAME)
 
--- /eval t = js.create_table(); t.x = 1; t.blah = {'a','b','c',{"inside"}}; t.blah_copy = t.blah; t.blah[2] = "B"
+-- /eval t = js.create_table(); t.x = 1; t.blah = {'a','b','c',{"inside"},'d'}; t.blah_copy = t.blah; t.blah[2] = "B"
 -- /eval js.save_json(function() print('saved') end, t, core.get_worldpath() .. "\\cool_table.json", true)
 
 local mod = {}

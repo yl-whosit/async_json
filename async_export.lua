@@ -44,7 +44,14 @@ function async.start_worker()
 end
 
 function async.stop_worker()
-    core.ipc_set(key.THE_WORKER, nil)
+    core.ipc_set(key.THE_WORKER, nil) -- set the flag to stop the worker
+    while true do
+        -- wait for the worker to process all messages
+        -- and send one last "job" to wake it up from the ipc_poll()
+        if core.ipc_cas(key.MORE_TASKS, nil, true) then
+            break
+        end
+    end
 end
 
 local id_counter = 1
@@ -54,14 +61,23 @@ local function new_table_id()
     return id
 end
 
+local function increment_task_count()
+    while true do
+        local task_count = core.ipc_get(key.MORE_TASKS)
+        local new_count = (task_count or 0) + 1
+        if core.ipc_cas(key.MORE_TASKS, task_count, new_count) then
+            break
+        end
+    end
+end
 
 function async.push_task(task)
     local async_fifo_back = core.ipc_get(key.FIFO_BACK)
     core.ipc_set(key.FIFO_PREFIX ..  tostring(async_fifo_back), task)
-    new_idx = async_fifo_back + 1
+    local new_idx = async_fifo_back + 1
     tell("PUSH BACK: %s -> %s", async_fifo_back, new_idx)
     assert(core.ipc_cas(key.FIFO_BACK, async_fifo_back, new_idx)) -- this is just for my sanity
-    core.ipc_set(key.MORE_TASKS, true)
+    increment_task_count()
 end
 
 

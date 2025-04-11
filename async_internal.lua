@@ -45,23 +45,6 @@ end
 
 --local values_cache = {}
 
-local function table_name_from_id(table_id)
-    return NAMESPACE .. fmt("table_%d", table_id)
-end
-
-local function get_new_address()
-    local addr_new
-    while true do
-        local addr_cur = core.ipc_get(key.ADDRESS_COUNTER)
-        addr_new = (addr_cur or 0) + 1
-        tell("trying to get new address", addr_new)
-        if core.ipc_cas(key.ADDRESS_COUNTER, addr_cur, addr_new) then
-            break
-        end
-   end
-   return fmt(NAMESPACE .. "addr%X", addr_new)
-end
-
 
 local counter = 0
 function env.create(table_id)
@@ -134,9 +117,25 @@ function env.save_json(table_id, filepath, styled)
     core.safe_file_write(filepath, json)
 end
 
+
+local function decrement_task_count()
+    while true do
+        local task_count = core.ipc_get(key.MORE_TASKS)
+        local new_count = task_count - 1
+        if new_count == 0 then
+            -- set it to nil so we can ipc_poll() it
+            new_count = nil
+        end
+        if core.ipc_cas(key.MORE_TASKS, task_count, new_count) then
+            break
+        end
+    end
+end
+
 local function pop_task()
     local async_fifo_front = core.ipc_get(key.FIFO_FRONT)
     local async_fifo_back = core.ipc_get(key.FIFO_BACK)
+
     if async_fifo_back == async_fifo_front then
         return
     end
@@ -144,6 +143,7 @@ local function pop_task()
     local new_idx = async_fifo_front + 1
     tell("POP FRONT: %s -> %s", async_fifo_front, new_idx)
     assert(core.ipc_cas(key.FIFO_FRONT, async_fifo_front, new_idx)) -- this is just for my sanity
+    decrement_task_count()
     return task
 end
 
@@ -175,23 +175,22 @@ local function process_fifo()
 end
 
 
+local POLL_TIMEOUT = 10000000 -- just wait "forever" (in milliseconds)
 local running = true
 function env.main_loop(key_running)
     assert(core.ipc_cas(key_running, nil, "whatever"))
     while running do
-        if core.ipc_poll(key.MORE_TASKS, 1000) then -- FIXME!!!!!!!!
-            -- local front = core.ipc_get(key.FIFO_FRONT)
-            -- local back = core.ipc_get(key.FIFO_BACK)
-            if true or back > front then
+        if core.ipc_poll(key.MORE_TASKS, POLL_TIMEOUT) then
+            local front = core.ipc_get(key.FIFO_FRONT)
+            local back = core.ipc_get(key.FIFO_BACK)
+            if back > front then
                 process_fifo()
-            else
-                core.ipc_cas(key.MORE_TASKS, true, nil)  -- FIXME this is blegh
             end
         else
             tell("POLL timed out...")
+            --print("POLL timeout")
         end
-
-
         running = core.ipc_get(key_running)
     end
+    --print("worker stopping.")
 end

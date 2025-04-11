@@ -2,25 +2,25 @@ local fmt = string.format
 
 local NAMESPACE = "json_storage:"
 local KEY_JOB_COUNTER = NAMESPACE .. "job_counter"
+local KEY_ADDRESS_COUNTER = NAMESPACE .. "addr_counter"
 
 env = {}
 
--- local job_id
--- do
--- --    while true do
---         local job_count = core.ipc_get(KEY_JOB_COUNTER) or 0
---         job_id = job_count + 1
---         print("* trying to get job_id", job_id)
---         if core.ipc_cas(KEY_JOB_COUNTER, job_count, job_id) then
---             --break
---         end
--- --    end
--- end
+local job_id
+do
+   while true do
+        local job_count = core.ipc_get(KEY_JOB_COUNTER)
+        job_id = (job_count or 0) + 1
+        print("* trying to get job_id", job_id)
+        if core.ipc_cas(KEY_JOB_COUNTER, job_count, job_id) then
+            break
+        end
+   end
+end
 
--- this is just a stupid value to try to differentiate worker threads, since I can't use IPC during dofile()?
-local env_seed = math.floor(os.clock())*100 + math.random(1,99)
+
 local function tell(fmt, ...)
-    print(string.format("* [ASYNC %s]" .. fmt, env_seed, ...))
+    print(string.format("* [ASYNC %s]" .. fmt, job_id, ...))
 end
 
 tell("loaded")
@@ -40,15 +40,28 @@ end
 -- We need to somehow mirror GC
 --local mirrors = {}
 
-
-
-
 --local values_cache = {}
+
+
+local function get_new_address()
+    local addr_new
+    while true do
+        local addr_cur = core.ipc_get(KEY_ADDRESS_COUNTER)
+        addr_new = (addr_cur or 0) + 1
+        tell("trying to get new address", addr_new)
+        if core.ipc_cas(KEY_ADDRESS_COUNTER, addr_cur, addr_new) then
+            break
+        end
+   end
+   return fmt(NAMESPACE .. "addr%X", addr_new)
+end
+
 
 local counter = 0
 function env.create(table_id)
     assert(type(table_id) == "number")
-    local table_name = fmt("table_%d", table_id)
+    local addr = get_new_address()
+    local table_name = NAMESPACE .. fmt("table_%d", table_id)
     tell("creating table_%s", table_id)
     local new_table = {
         version = 0,
@@ -56,7 +69,8 @@ function env.create(table_id)
     }
     --mirrors[table_id] = new_table
     counter = counter + 1
-    assert(core.ipc_cas(NAMESPACE .. table_name, nil, new_table))
+    core.ipc_set(addr, new_table) -- actual data
+    assert(core.ipc_cas(table_name, nil, addr)) -- this is just a pointer to data
     --sleep(10)
     return fmt("number of tables created: %s", counter)
 end
@@ -64,16 +78,22 @@ end
 
 function env.update(table_id, version, key, value)
     tell("updating table_%s[%s] = %s (v%s)", table_id, key, value, version)
+    local new_table_addr = get_new_address()
     while true do
         local table_name = NAMESPACE .. fmt("table_%d", table_id)
-        local cur_table = core.ipc_get(table_name)
+        local cur_table_addr = core.ipc_get(table_name)
+        local cur_table = core.ipc_get(cur_table_addr)
         if cur_table.version >= version then
-            tell("OUTDATED table_%s[%s] = %s was (v%s) now (v%s)", table_id, key, value, version, cur_table.version)
+            tell("OUTDATED table_%s[%s] = %s was (v%s) now (v%s)", table_id, key, value, version, cur_table_addr.version)
             break
         end
-        local new_table = table.copy(cur_table)
+        local new_table = {
+             version = version,
+             data = table.copy(cur_table.data),
+        }
         new_table.data[key] = value
-        if core.ipc_cas(table_name, cur_table, new_table) then
+        core.ipc_set(new_table_addr, new_table)
+        if core.ipc_cas(table_name, cur_table_addr, new_table_addr) then
             tell("UPDATE SUCCESS %s", table_name)
             break
         end

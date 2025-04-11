@@ -136,6 +136,10 @@ end
 
 local function pop_task()
     local async_fifo_front = core.ipc_get(key.FIFO_FRONT)
+    local async_fifo_back = core.ipc_get(key.FIFO_BACK)
+    if async_fifo_back == async_fifo_front then
+        return
+    end
     local task = core.ipc_get(key.FIFO_PREFIX .. tostring(async_fifo_front))
     local new_idx = async_fifo_front + 1
     tell("POP FRONT: %s -> %s", async_fifo_front, new_idx)
@@ -145,9 +149,9 @@ end
 
 local function process_fifo()
     local task = pop_task()
-    -- if not task then
-    --     return
-    -- end
+    if not task then
+        return
+    end
     local message = task.message
     if message == "create" then
         tell("GOT_TASK * %s %s", task.message, task.table_id)
@@ -168,8 +172,6 @@ local function process_fifo()
         tell("GOT_TASK * %s????", task.message)
         error(fmt("unknown message %s", message))
     end
-
-    core.ipc_cas(key.MORE_TASKS, true, nil) -- FIXME this is blegh
 end
 
 
@@ -177,16 +179,18 @@ local running = true
 function env.main_loop(key_running)
     assert(core.ipc_cas(key_running, nil, "whatever"))
     while running do
-        -- if core.ipc_poll(key.MORE_TASKS, 1000) then -- FIXME!!!!!!!!
-        --     process_fifo()
-        -- else
-        --     tell("POLL timed out...")
-        -- end
-        local front = core.ipc_get(key.FIFO_FRONT)
-        local back = core.ipc_get(key.FIFO_BACK)
-        if back > front then
-            process_fifo()
+        if core.ipc_poll(key.MORE_TASKS, 1000) then -- FIXME!!!!!!!!
+            -- local front = core.ipc_get(key.FIFO_FRONT)
+            -- local back = core.ipc_get(key.FIFO_BACK)
+            if true or back > front then
+                process_fifo()
+            else
+                core.ipc_cas(key.MORE_TASKS, true, nil)  -- FIXME this is blegh
+            end
+        else
+            tell("POLL timed out...")
         end
+
 
         running = core.ipc_get(key_running)
     end

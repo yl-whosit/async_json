@@ -25,7 +25,7 @@ end
 
 
 local function tell(fmt, ...)
-    print(string.format("* [ASYNC %s] " .. fmt, job_id, ...))
+    --print(string.format("* [ASYNC %s] " .. fmt, job_id, ...))
 end
 
 tell("loaded")

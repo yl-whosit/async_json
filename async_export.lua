@@ -13,7 +13,7 @@ local initialized = false
 local UNIQUE_TABLE = {"json_table"} -- used to identify our tables as a special type
 
 local function tell(fmt, ...)
-    print(string.format("* [ASYNC_INTERFACE] " .. fmt, ...))
+    --print(string.format("* [ASYNC_INTERFACE] " .. fmt, ...))
 end
 
 local function async_done_callback(label)

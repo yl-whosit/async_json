@@ -1,6 +1,14 @@
 local fmt = string.format
+--local NAMESPACE = "json_storage:"
+local key = dofile(core.get_modpath(core.get_current_modname())  .. DIR_DELIM .. "ipc_keys.lua")
+
+-- local ASYNC_FIFO_SIZE = 1024 -- fix the size and wrap around indices?
+-- local async_queue_front = 0
+-- local async_queue_back = 0
 
 local async = {} -- the module table
+
+local initialized = false
 
 local UNIQUE_TABLE = {"json_table"} -- used to identify our tables as a special type
 
@@ -22,26 +30,48 @@ local function log(...)
     print(msg)
 end
 
+function async.start_worker()
+    local async_start_worker = function(key, running_key)
+        -- because this function actually exists in async env, we mush shadow the `key` var
+        core.ipc_set(key.FIFO_BACK, 0)
+        core.ipc_set(key.FIFO_FRONT, 0)
+        env.main_loop(running_key)
+    end
+    local async_finished = function()
+        tell("FINISHED")
+    end
+    core.handle_async(async_start_worker, async_finished, key, key.THE_WORKER)
+end
+
+function async.stop_worker()
+    core.ipc_set(key.THE_WORKER, nil)
+end
 
 local id_counter = 1
-local function new_id()
+local function new_table_id()
     local id = id_counter
     id_counter = id_counter + 1
     return id
 end
 
-local function async_wrap(func)
 
-end
-
-
-local function _create(table_id)
-    env.create(table_id)
+function async.push_task(task)
+    local async_fifo_back = core.ipc_get(key.FIFO_BACK)
+    core.ipc_set(key.FIFO_PREFIX ..  tostring(async_fifo_back), task)
+    new_idx = async_fifo_back + 1
+    tell("PUSH BACK: %s -> %s", async_fifo_back, new_idx)
+    assert(core.ipc_cas(key.FIFO_BACK, async_fifo_back, new_idx)) -- this is just for my sanity
+    core.ipc_set(key.MORE_TASKS, true)
 end
 
 
 local function create(table_id)
-    core.handle_async(_create, async_done_callback("create"), table_id)
+    async.push_task(
+        {
+            message = "create",
+            table_id = table_id,
+        }
+    )
 end
 
 
@@ -51,28 +81,34 @@ local function _update(table_id, table_version, path, value)
 end
 
 
-local function update(table_id, table_version, path, value)
+local function update(table_id, table_version, key, value)
     if type(value) == "table" then
-        --print("***", dump(value))
         local mt = getmetatable(value) or {}
-        --print("***", dump(mt))
         assert(mt._type == UNIQUE_TABLE)
         value = {
             id = mt._id,
             version = mt._version,
         }
     end
-    core.handle_async(_update, async_done_callback("update"), table_id, table_version, path, value)
-end
-
-
-local function _delete(table_id)
-    env._delete(table_id)
+    async.push_task(
+        {
+            message = "update",
+            table_id = table_id,
+            version = table_version,
+            key = key,
+            value = value,
+        }
+    )
 end
 
 
 local function delete(table_id)
-    core.handle_async(_delete, async_done_callback("delete"), table_id)
+    async.push_task(
+        {
+            message = "delete",
+            table_id = table_id,
+        }
+    )
 end
 
 
@@ -84,7 +120,7 @@ end
 
 
 local function _mk_table(data, is_root)
-    local id = new_id()
+    local id = new_table_id()
     create(id)
     local dummy
     local mt
@@ -188,30 +224,34 @@ function async.create_table(data)
 end
 
 
-function async.dump(table_id)
-    local function _dump(id)
-        env.dump_table(id)
-    end
-    core.handle_async(_dump, async_done_callback("dump"), table_id)
-end
+-- function async.dump(table_id)
+--     local function _dump(id)
+--         env.dump_table(id)
+--     end
+--     core.handle_async(_dump, async_done_callback("dump"), table_id)
+-- end
 
 
-function async.get_json(callback, json_table)
+-- function async.get_json(callback, json_table)
+--     local table_id = async.get_table_id(json_table)
+--     local function _get_json(id)
+--         local json = env.get_json(id)
+--         return json
+--     end
+--     core.handle_async(_get_json, callback, table_id)
+-- end
+
+
+function async.save_json(json_table, filepath, styled)
     local table_id = async.get_table_id(json_table)
-    local function _get_json(id)
-        local json = env.get_json(id)
-        return json
-    end
-    core.handle_async(_get_json, callback, table_id)
-end
-
-
-function async.save_json(callback, json_table, filepath, styled)
-    local table_id = async.get_table_id(json_table)
-    local function _save_json(id, filepath, styled)
-        env.save_json(id, filepath, styled)
-    end
-    core.handle_async(_save_json, callback, table_id, filepath, styled)
+    async.push_task(
+        {
+            message = "save",
+            table_id = table_id,
+            filepath = filepath,
+            styled = styled,
+        }
+    )
 end
 
 

@@ -59,6 +59,14 @@ local function update(table_id, path, value)
 end
 
 
+local function _delete(table_id)
+    env._delete(table_id)
+end
+
+local function delete(table_id)
+    core.handle_async(_delete, async_done_callback("delete"), table_id)
+end
+
 function async.get_table_id(t)
     local mt = getmetatable(t)
     assert(mt._type == UNIQUE_TABLE)
@@ -118,6 +126,10 @@ local function _mk_table(data)
             return fmt("<json_table_%s>", id)
         end,
         --__metatable = UNIQUE_TABLE,
+        __gc = function()
+            log("* deteling json_table_%s[%s]", id)
+            delete(id)
+        end,
     }
     local t = setmetatable(dummy, mt)
 

@@ -9,7 +9,8 @@ tell("loaded")
 
 -- FIXME: Add some sanity check while developing, like reading the version number before writing
 
--- FIXME this needs to be a weak table?
+-- FIXME this needs to be a "weak" table?
+-- We need to somehow mirror GC
 local mirrors = {}
 
 --local values_cache = {}
@@ -24,6 +25,12 @@ end
 function env.update(table_id, key, value)
     tell("updating table_%s[%s] = %s", table_id, key, value)
     mirrors[table_id][key] = value
+end
+
+
+function env.delete(table_id)
+    tell("removing table_%s", table_id)
+    mirrors[table_id] = nil
 end
 
 

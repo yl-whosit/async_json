@@ -53,7 +53,10 @@ local function update(table_id, path, value)
         local mt = getmetatable(value) or {}
         --print("***", dump(mt))
         assert(mt._type == UNIQUE_TABLE)
-        value = { id = mt._id }
+        value = {
+            id = mt._id,
+            is_root = mt._is_root, -- this is pointless
+        }
     end
     core.handle_async(_update, async_done_callback("update"), table_id, path, value)
 end
@@ -63,9 +66,11 @@ local function _delete(table_id)
     env._delete(table_id)
 end
 
+
 local function delete(table_id)
     core.handle_async(_delete, async_done_callback("delete"), table_id)
 end
+
 
 function async.get_table_id(t)
     local mt = getmetatable(t)
@@ -74,65 +79,80 @@ function async.get_table_id(t)
 end
 
 
-local function _mk_table(data)
+local function _mk_table(data, is_root)
     local id = new_id()
     create(id)
-    local dummy = {} -- this must be empty to redirect all access to metamethods!
+    local dummy
+    local mt
+    if newproxy then
+        -- this should work in 5.1, but luanti does not whitelist newproxy() function!
+        dummy = newproxy(true)
+        mt = getmetatable(dummy)
+    else
+        -- This requires 5.2 or luajit with 5.2 compat to actually call __gc!
+        dummy = {} -- this must be empty to redirect all access to metamethods!
+        mt = {}
+        setmetatable(dummy, mt)
+    end
     local actual
-    local mt = {
-        _type = UNIQUE_TABLE,
-        _id = id,
-        --_reference_count = 0, just mark and sweep the mirror instead?
-        __index = function(t, key)
-            log("* json_table_%s[%s]", id, key)
-            return actual[key]
-        end,
-        __newindex = function(t, key, value)
 
-            local typ = type(value)
-            if typ == "table" then
-                if (getmetatable(value) or {})._type == UNIQUE_TABLE then
-                    actual[key] = value
-                else
-                    local wrapped_table = _mk_table(value)
-                    actual[key] = wrapped_table
-                end
-            elseif typ == "string" or typ == "number" or typ == "boolean" or typ == "nil" then
-                --async.update(id, key, value)
+    mt._type = UNIQUE_TABLE
+    mt._id = id
+    mt._is_root = is_root -- this is pointless
+
+    mt.__index = function(t, key)
+        log("* json_table_%s[%s]", id, key)
+        return actual[key]
+    end
+
+    mt.__newindex = function(t, key, value)
+        local typ = type(value)
+        if typ == "table" then
+            if (getmetatable(value) or {})._type == UNIQUE_TABLE then
                 actual[key] = value
             else
-                error(string.format("JSON can't store values of type %s", typ))
+                local wrapped_table = _mk_table(value)
+                actual[key] = wrapped_table
             end
-            log("* json_table_%s[%s] = %s", id, key, actual[key])
-            update(id, key, actual[key]) -- FIXME this is wrong??
-        end,
-        __pairs = function(t)
-            local k,v
-            print("* __pairs called")
-            return function()
-                k, v = next(actual, k)
-                return k, v
-            end
-        end,
-        __call = function(t)
-            local k,v
-            print("* __call called")
-            return function()
-                k, v = next(actual, k)
-                return k, v
-            end
-        end,
-        __tostring = function()
-            return fmt("<json_table_%s>", id)
-        end,
-        --__metatable = UNIQUE_TABLE,
-        __gc = function()
-            log("* deteling json_table_%s[%s]", id)
-            delete(id)
-        end,
-    }
-    local t = setmetatable(dummy, mt)
+        elseif typ == "string" or typ == "number" or typ == "boolean" or typ == "nil" then
+            --async.update(id, key, value)
+            actual[key] = value
+        else
+            error(string.format("JSON can't store values of type %s", typ))
+        end
+        log("* json_table_%s[%s] = %s", id, key, actual[key])
+        update(id, key, actual[key]) -- FIXME this is wrong??
+    end
 
+    mt.__pairs = function(t)
+        local k,v
+        print("* __pairs called")
+        return function()
+            k, v = next(actual, k)
+            return k, v
+        end
+    end
+    
+    mt.__call = function(t)
+        local k,v
+        print("* __call called")
+        return function()
+            k, v = next(actual, k)
+            return k, v
+        end
+    end
+
+    mt.__tostring = function()
+        return fmt("<json_table_%s>", id)
+    end
+
+    --__metatable = UNIQUE_TABLE,
+    mt.__gc = function()
+        log("* deteling json_table_%s[%s]", id)
+        delete(id)
+    end
+
+    local t = dummy -- ugh, it's already has metatable assigned.
     if data then
         if type(data) ~= "table" then
             error("Internal table must be a table")
@@ -154,9 +174,10 @@ local function _mk_table(data)
 end
 
 
-function async.create_table()
+function async.create_table(data)
     -- this is not really async, since table is usable as soon as this returns
-    return _mk_table()
+    local is_root = true
+    return _mk_table(data, is_root)
 end
 
 
@@ -184,6 +205,22 @@ function async.save_json(callback, json_table, filepath, styled)
         env.save_json(id, filepath, styled)
     end
     core.handle_async(_save_json, callback, table_id, filepath, styled)
+end
+
+
+function async.load_json(filepath)
+    -- not actually async!
+    local file, file_err = io.open(filepath, 'r')
+    if not file then
+        error(file_err)
+    end
+    local filedata = file:read("*all")
+    file:close()
+    local data, parse_err = core.parse_json(filedata, nil, true)
+    if not data then
+        error(parse_err)
+    end
+    return async.create_table(data)
 end
 
 

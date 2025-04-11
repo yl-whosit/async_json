@@ -16,6 +16,7 @@ local async = dofile(MODPATH .. DIR_DELIM .. "async_export.lua")
 
 mod.create_table = async.create_table
 mod.save_json = async.save_json
+mod.load_json = async.load_json
 
 
 -- function mod.do_stuff(id)

@@ -41,7 +41,7 @@ function env.dump_table(table_id)
 end
 
 
-function reconstruct(table_id, reconstructed)
+local function reconstruct(table_id, reconstructed)
     local out = {}
     if not reconstructed then
         reconstructed = {}

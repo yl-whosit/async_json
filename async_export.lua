@@ -3,7 +3,7 @@ local fmt = string.format
 local key = dofile(core.get_modpath(core.get_current_modname()) .. DIR_DELIM .. "ipc_keys.lua")
 
 -- local ASYNC_FIFO_SIZE = 1024 -- TODO fix the size and wrap around indices?
-
+-- split index ranges into (2?) blocks, once block is fully used, re-use the indices.
 
 local async = {} -- the module table
 

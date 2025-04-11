@@ -36,12 +36,13 @@ end
 
 -- FIXME: Add some sanity check while developing, like reading the version number before writing
 
--- FIXME this needs to be a "weak" table?
--- We need to somehow mirror GC
---local mirrors = {}
+-- FIXME The mirrored tables needs to somehow be a "weak" table. We basically must mirror main thread GC.
 
 --local values_cache = {}
 
+local function table_name_from_id(table_id)
+    return NAMESPACE .. fmt("table_%d", table_id)
+end
 
 local function get_new_address()
     local addr_new
@@ -61,13 +62,12 @@ local counter = 0
 function env.create(table_id)
     assert(type(table_id) == "number")
     local addr = get_new_address()
-    local table_name = NAMESPACE .. fmt("table_%d", table_id)
+    local table_name = table_name_from_id(table_id)
     tell("creating table_%s", table_id)
     local new_table = {
         version = 0,
         data = {},
     }
-    --mirrors[table_id] = new_table
     counter = counter + 1
     core.ipc_set(addr, new_table) -- actual data
     assert(core.ipc_cas(table_name, nil, addr)) -- this is just a pointer to data
@@ -80,7 +80,7 @@ function env.update(table_id, version, key, value)
     tell("updating table_%s[%s] = %s (v%s)", table_id, key, value, version)
     local new_table_addr = get_new_address()
     while true do
-        local table_name = NAMESPACE .. fmt("table_%d", table_id)
+        local table_name = table_name_from_id(table_id)
         local cur_table_addr = core.ipc_get(table_name)
         local cur_table = core.ipc_get(cur_table_addr)
         if cur_table.version >= version then
@@ -95,6 +95,7 @@ function env.update(table_id, version, key, value)
         core.ipc_set(new_table_addr, new_table)
         if core.ipc_cas(table_name, cur_table_addr, new_table_addr) then
             tell("UPDATE SUCCESS %s", table_name)
+            core.ipc_set(cur_table_addr, nil) -- remove old data
             break
         end
     end
@@ -103,16 +104,18 @@ end
 
 function env.delete(table_id)
     tell("removing table_%s", table_id)
-    mirrors[table_id] = nil
+    local table_name = table_name_from_id(table_id)
+    local cur_table_addr = core.ipc_get(table_name)
+    core.ipc_set(cur_table_addr, nil)
+    core.ipc_set(table_name, nil)
 end
 
-
-function env.dump_table(table_id)
-    for k,v in pairs(mirrors[table_id].data) do
-        print("|", dump(k), dump(v), dump((getmetatable(v) or {})._type))
-    end
+local function get_table_data(table_id)
+    local table_name = table_name_from_id(table_id)
+    local cur_table_addr = core.ipc_get(table_name)
+    local table_entry = core.ipc_get(cur_table_addr)
+    return table_entry.data, table_entry.version
 end
-
 
 local function reconstruct(table_id, reconstructed)
     local out = {}
@@ -123,7 +126,7 @@ local function reconstruct(table_id, reconstructed)
     if existing then
         return existing
     end
-    for k,v in pairs(mirrors[table_id].data) do
+    for k,v in pairs(get_table_data(table_id)) do
         if type(v) == "table" then
             out[k] = reconstruct(v.id, reconstructed)
         else

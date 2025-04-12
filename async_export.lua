@@ -1,6 +1,6 @@
 local fmt = string.format
 
-local key = dofile(core.get_modpath(core.get_current_modname()) .. DIR_DELIM .. "ipc_keys.lua")
+local KEY = dofile(core.get_modpath(core.get_current_modname()) .. DIR_DELIM .. "ipc_keys.lua")
 
 -- local ASYNC_FIFO_SIZE = 1024 -- TODO fix the size and wrap around indices?
 -- split index ranges into (2?) blocks, once block is fully used, re-use the indices.
@@ -11,8 +11,8 @@ local async = {} -- the module table
 
 local UNIQUE_TABLE = { "json_table" } -- used to identify our tables as a special type
 
-local function tell(fmt, ...)
-    --print(string.format("* [ASYNC_INTERFACE] " .. fmt, ...))
+local function tell(format, ...)
+    print(fmt("* [ASYNC_INTERFACE] " .. format, ...))
 end
 
 -- TODO make everything local
@@ -24,24 +24,25 @@ local function log(...)
 end
 
 function async.start_worker()
-    local async_start_worker = function(key, running_key)
+    local async_start_worker = function(KEY_, running_key)
         -- because this function actually exists in async env, we mush shadow the `key` var
-        core.ipc_set(key.FIFO_BACK, 0)
-        core.ipc_set(key.FIFO_FRONT, 0)
-        env.main_loop(running_key)
+        core.ipc_set(KEY_.FIFO_BACK, 0)
+        core.ipc_set(KEY_.FIFO_FRONT, 0)
+        -- env is a global var in our async environment
+        env.main_loop(running_key) -- luacheck: ignore
     end
     local async_finished = function()
         tell("FINISHED")
     end
-    core.handle_async(async_start_worker, async_finished, key, key.THE_WORKER)
+    core.handle_async(async_start_worker, async_finished, KEY, KEY.THE_WORKER)
 end
 
 function async.stop_worker()
-    core.ipc_set(key.THE_WORKER, nil) -- set the flag to stop the worker
+    core.ipc_set(KEY.THE_WORKER, nil) -- set the flag to stop the worker
     while true do
         -- wait for the worker to process all messages
         -- and send one last "job" to wake it up from the ipc_poll()
-        if core.ipc_cas(key.MORE_TASKS, nil, true) then
+        if core.ipc_cas(KEY.TASK_COUNT, nil, true) then
             break
         end
     end
@@ -49,27 +50,30 @@ end
 
 local id_counter = 1
 local function new_table_id()
+    -- Unique number to identify tables. Gets passed to async, not
+    -- saved anywhere.
     local id = id_counter
     id_counter = id_counter + 1
     return id
 end
 
 local function increment_task_count()
+    -- This counter is set to nil by the worker to signal that it's done.
     while true do
-        local task_count = core.ipc_get(key.MORE_TASKS)
+        local task_count = core.ipc_get(KEY.TASK_COUNT)
         local new_count = (task_count or 0) + 1
-        if core.ipc_cas(key.MORE_TASKS, task_count, new_count) then
+        if core.ipc_cas(KEY.TASK_COUNT, task_count, new_count) then
             break
         end
     end
 end
 
 function async.push_task(task)
-    local async_fifo_back = core.ipc_get(key.FIFO_BACK)
-    core.ipc_set(key.FIFO_PREFIX .. tostring(async_fifo_back), task)
+    local async_fifo_back = core.ipc_get(KEY.FIFO_BACK)
+    core.ipc_set(KEY.FIFO_PREFIX .. tostring(async_fifo_back), task)
     local new_idx = async_fifo_back + 1
     tell("PUSH BACK: %s -> %s", async_fifo_back, new_idx)
-    assert(core.ipc_cas(key.FIFO_BACK, async_fifo_back, new_idx)) -- this is just for my sanity
+    assert(core.ipc_cas(KEY.FIFO_BACK, async_fifo_back, new_idx)) -- this is just for my sanity
     increment_task_count()
 end
 
@@ -83,13 +87,12 @@ local function create(table_id)
 end
 
 
-local function update(table_id, table_version, key, value)
+local function update(table_id, key, value)
     if type(value) == "table" then
         local mt = getmetatable(value) or {}
         assert(mt._type == UNIQUE_TABLE)
         value = {
             id = mt._id,
-            version = mt._version,
         }
     end
     -- TODO instead of actually pushing new message here, just collect them,
@@ -99,7 +102,6 @@ local function update(table_id, table_version, key, value)
         {
             message = "update",
             table_id = table_id,
-            version = table_version,
             key = key,
             value = value,
         }
@@ -145,7 +147,6 @@ local function _mk_table(data, is_root)
         -- This requires 5.2 or luajit with 5.2 compat to actually call __gc!
         dummy = {} -- this must be empty to redirect all access to metamethods!
         mt = {}
-        setmetatable(dummy, mt)
         -- If you're running lua that does not call __gc metamethod, your async
         -- will just slowly eat your memory.
     end
@@ -154,14 +155,13 @@ local function _mk_table(data, is_root)
     mt._type = UNIQUE_TABLE
     mt._id = id
     mt._is_root = is_root -- this is pointless
-    mt._version = 0
 
-    mt.__index = function(t, key)
+    mt.__index = function(_dummy, key)
         log("* json_table_%s[%s]", id, key)
         return actual[key]
     end
 
-    mt.__newindex = function(t, key, value)
+    mt.__newindex = function(_dummy, key, value)
         local typ = type(value)
         if typ == "table" then
             if (getmetatable(value) or {})._type == UNIQUE_TABLE then
@@ -179,13 +179,11 @@ local function _mk_table(data, is_root)
             error(string.format("JSON can't store values of type %s", typ))
         end
         log("* json_table_%s[%s] = %s", id, key, actual[key])
-        local ver = mt._version + 1
-        mt._version = ver
         -- send update to async
-        update(id, ver, key, actual[key])
+        update(id, key, actual[key])
     end
 
-    mt.__pairs = function(t)
+    mt.__pairs = function(_dummy)
         -- this required luajit 5.2 compat!!!
         local k, v
         print("* __pairs called")
@@ -195,10 +193,10 @@ local function _mk_table(data, is_root)
         end
     end
 
-    mt.__call = function(t)
+    mt.__call = function(_dummy)
         -- use this for iteration instead, if you don't have pairs() support!
         local k, v
-        print("* __call called")
+        tell("* __call called")
         return function()
             k, v = next(actual, k)
             return k, v
@@ -215,7 +213,13 @@ local function _mk_table(data, is_root)
         delete(id)
     end
 
-    local t = dummy -- ugh, it's already has metatable assigned.
+    local t
+    if not getmetatable(dummy) then
+        -- we must assign the mt with __gc field set, otherwise it won't be called
+        t = setmetatable(dummy, mt)
+    else
+        t = dummy -- ugh, it's already has metatable assigned (it's a newproxy)
+    end
     if data then
         if type(data) ~= "table" then
             error("Internal table must be a table")

@@ -1,3 +1,6 @@
+## untested, unfinished, do not use.
+
+
 # Provides a table structure that gets mirrored in an async environmet
 
 This should speed up process of saving of large structures into JSON
